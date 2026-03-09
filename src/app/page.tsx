@@ -15,8 +15,7 @@ type TabKey = "chat" | "photos" | "docs" | "audio" | "contacts";
 const ts = () => new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-// Max audio size for Gemini inline data (4 MB base64 ≈ 3 MB file)
-const MAX_AUDIO_BYTES = 3 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 3 * 1024 * 1024; // ~3 MB
 
 export default function Home() {
   const { isDemoUser, userName, enableDemoMode, disableDemoMode } = useDemoUser();
@@ -28,23 +27,59 @@ export default function Home() {
   const [manualReply, setManualReply] = useState("");
   const [heardInput, setHeardInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const replyRef = useRef<HTMLTextAreaElement>(null);
 
   // Media state
   const [preview, setPreview] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
 
-  // Speech recognition with auto-stop callback
+  // ── Refs for stable callbacks ────────────────────────────────
+  const messagesRef = useRef(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  const addMsg = useCallback((type: ChatMsg["type"], text: string) => {
+    const msg = { id: uid(), type, text, time: ts() };
+    setMessages(p => [...p, msg]);
+    if (typeof window !== "undefined") {
+      try {
+        const h = JSON.parse(localStorage.getItem("oirte_history") || "[]");
+        localStorage.setItem("oirte_history", JSON.stringify([...h, `[${type}] ${text}`]));
+      } catch { /* ignore */ }
+    }
+  }, []);
+
+  const fetchSuggestions = useCallback(async (text: string) => {
+    setIsThinking(true);
+    setResponses([]);
+    try {
+      const r = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      if (Array.isArray(d.responses)) setResponses(d.responses);
+    } catch (e: any) {
+      setMessages(p => [...p, { id: uid(), type: "system", text: "❌ Error IA: " + e.message, time: ts() }]);
+    } finally {
+      setIsThinking(false);
+    }
+  }, []);
+
+  // ── Speech recognition callback: fires on auto-stop OR manual stop ──
   const onAutoStop = useCallback((finalText: string) => {
     if (finalText.trim()) {
+      // Check if this text was already added (prevent duplicates)
+      const last = messagesRef.current[messagesRef.current.length - 1];
+      if (last?.type === "heard" && last?.text === finalText.trim()) return;
+
       addMsg("heard", finalText.trim());
       fetchSuggestions(finalText.trim());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [addMsg, fetchSuggestions]);
 
-  const { isListening, transcript, isSupported, toggleListening, stopListening, setTranscript } =
+  const { isListening, transcript, isSupported, toggleListening, setTranscript } =
     useSpeechRecognition(onAutoStop);
 
   // Auto-scroll chat
@@ -52,18 +87,7 @@ export default function Home() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, responses, transcript]);
 
-  // ── Helpers ───────────────────────────────────────────────────────
-  const save = useCallback((entry: string) => {
-    if (!isDemoUser) return;
-    const h = JSON.parse(localStorage.getItem("oirte_history") || "[]");
-    localStorage.setItem("oirte_history", JSON.stringify([...h, entry]));
-  }, [isDemoUser]);
-
-  const addMsg = useCallback((type: ChatMsg["type"], text: string) => {
-    setMessages(p => [...p, { id: uid(), type, text, time: ts() }]);
-    save(`[${type}] ${text}`);
-  }, [save]);
-
+  // ── Speak helper ─────────────────────────────────────────────
   const speak = useCallback((text: string, idx?: number) => {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
@@ -77,26 +101,6 @@ export default function Home() {
     window.speechSynthesis.speak(u);
   }, []);
 
-  // ── Gemini: get 3 suggestions ─────────────────────────────────────
-  const fetchSuggestions = async (text: string) => {
-    setIsThinking(true);
-    setResponses([]);
-    try {
-      const r = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error);
-      if (Array.isArray(d.responses)) setResponses(d.responses);
-    } catch (e: any) {
-      addMsg("system", "❌ Error IA: " + e.message);
-    } finally {
-      setIsThinking(false);
-    }
-  };
-
   const selectResponse = (text: string, idx: number) => {
     addMsg("said", text);
     speak(text, idx);
@@ -104,7 +108,6 @@ export default function Home() {
     setTranscript("");
   };
 
-  // ── Send manual reply (user's own text) ─────────────────────────
   const sendReply = () => {
     const t = manualReply.trim();
     if (!t) return;
@@ -114,22 +117,12 @@ export default function Home() {
     setResponses([]);
   };
 
-  // ── Send "heard" text manually ──────────────────────────────────
   const sendHeardText = () => {
     const t = heardInput.trim();
     if (!t) return;
     addMsg("heard", t);
     fetchSuggestions(t);
     setHeardInput("");
-  };
-
-  // ── Manual analyze from transcript ─────────────────────────────
-  const analyzeTranscript = () => {
-    if (!transcript.trim()) return;
-    stopListening();
-    addMsg("heard", transcript.trim());
-    fetchSuggestions(transcript.trim());
-    setTranscript("");
   };
 
   // ── Photo upload ──────────────────────────────────────────────
@@ -144,7 +137,7 @@ export default function Home() {
         const r = await fetch("/api/gemini", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type }),
+          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type || "image/jpeg" }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
@@ -155,19 +148,45 @@ export default function Home() {
     reader.readAsDataURL(f);
   };
 
-  // ── Doc upload ────────────────────────────────────────────────
+  // ── Doc upload (images + text files) ──────────────────────────
   const handleDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]; if (!f) return;
     setMediaLoading(true); setSummary(null); setPreview(null);
+
+    // Text-based files: read as text and send to docText endpoint
+    const textTypes = [
+      "text/plain", "text/markdown", "text/html", "text/csv",
+      "application/json", "application/xml",
+    ];
+    const textExts = [".txt", ".md", ".csv", ".json", ".xml", ".html", ".log", ".rtf"];
+    const isTextFile = textTypes.includes(f.type) || textExts.some(ext => f.name.toLowerCase().endsWith(ext));
+
+    if (isTextFile) {
+      try {
+        const text = await f.text();
+        const r = await fetch("/api/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ docText: text }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setSummary(d.summary); speak(d.summary);
+      } catch (err: any) { alert("❌ " + err.message); }
+      finally { setMediaLoading(false); e.target.value = ""; }
+      return;
+    }
+
+    // Image/PDF: send as inline data
     const reader = new FileReader();
     reader.onloadend = async () => {
       const url = reader.result as string;
-      setPreview(url);
+      if (f.type.startsWith("image/")) setPreview(url);
       try {
         const r = await fetch("/api/gemini", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type, docMode: true }),
+          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type || "application/pdf", docMode: true }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
@@ -193,8 +212,9 @@ export default function Home() {
       const buffer = await f.arrayBuffer();
       const bytes = new Uint8Array(buffer);
       let binary = "";
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      const chunk = 8192;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
       }
       const base64 = btoa(binary);
 
@@ -208,7 +228,7 @@ export default function Home() {
       setSummary(d.transcription || d.summary || "No se pudo transcribir.");
       if (d.transcription) speak(d.transcription);
     } catch (err: any) {
-      alert("❌ Error al transcribir: " + err.message);
+      alert("❌ Error: " + err.message);
     } finally {
       setMediaLoading(false);
       e.target.value = "";
@@ -216,28 +236,47 @@ export default function Home() {
   };
 
   // ═══════════════════════════════════════════════════════════════
+  // STYLES (inline to avoid CSS framework conflicts on mobile)
+  // ═══════════════════════════════════════════════════════════════
+  const S = {
+    shell: { position: "fixed" as const, inset: 0, display: "flex", flexDirection: "column" as const, maxWidth: 640, margin: "0 auto", width: "100%", background: "#09090b" },
+    header: { flexShrink: 0, padding: "8px 12px", background: "#18181b", borderBottom: "1px solid #27272a", display: "flex", alignItems: "center", justifyContent: "space-between", zIndex: 100 },
+    body: { flex: 1, overflowY: "auto" as const, overflowX: "hidden" as const, WebkitOverflowScrolling: "touch" as const },
+    tabBar: { flexShrink: 0, display: "flex", background: "#18181b", borderTop: "1px solid #27272a", paddingBottom: "env(safe-area-inset-bottom, 0px)" },
+    tabBtn: (active: boolean) => ({ flex: 1, display: "flex", flexDirection: "column" as const, alignItems: "center", justifyContent: "center", gap: 2, padding: "8px 0", fontSize: "0.65rem", fontWeight: 700, color: active ? "#facc15" : "#71717a", background: "none", border: "none", cursor: "pointer", WebkitTapHighlightColor: "transparent" }),
+    tabIcon: { width: 22, height: 22 },
+    input: { flex: 1, background: "#27272a", border: "2px solid #3f3f46", borderRadius: 12, padding: "10px 12px", fontSize: "1rem", fontWeight: 700, color: "#fafafa", outline: "none" },
+    sendBtn: (color: string, active: boolean) => ({ width: 46, height: 46, borderRadius: 12, background: color, color: color === "#facc15" ? "#422006" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", border: "none", cursor: "pointer", opacity: active ? 1 : 0.3, flexShrink: 0 }),
+    micBtn: (listening: boolean) => ({ flex: 1, padding: "14px 0", borderRadius: 16, fontWeight: 800, fontSize: "1.15rem", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: listening ? "#dc2626" : "#facc15", color: listening ? "#fff" : "#422006", border: "none", cursor: "pointer" }),
+    bubble: (type: string) => {
+      const base = { borderRadius: 16, padding: "12px 16px", maxWidth: "88%", fontSize: "1.25rem", fontWeight: 700, lineHeight: 1.4, wordBreak: "break-word" as const };
+      if (type === "heard") return { ...base, background: "#27272a", color: "#fafafa", borderLeft: "4px solid #facc15", alignSelf: "flex-start" as const };
+      if (type === "said") return { ...base, background: "#facc15", color: "#18181b", alignSelf: "flex-end" as const };
+      if (type === "ai") return { ...base, background: "#1a2e1a", color: "#bbf7d0", borderLeft: "4px solid #22c55e", alignSelf: "flex-start" as const };
+      return { ...base, background: "transparent", color: "#71717a", alignSelf: "center" as const, textAlign: "center" as const, fontSize: "0.9rem", maxWidth: "100%" };
+    },
+    btnHuge: { width: "100%", padding: "16px 20px", borderRadius: 16, fontWeight: 800, fontSize: "1.3rem", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, cursor: "pointer", border: "none", background: "#27272a", color: "#fafafa", WebkitTapHighlightColor: "transparent" },
+    resultBox: { background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 },
+  };
+
   return (
-    <div className="app-shell">
+    <div style={S.shell}>
 
       {/* ── Header ── */}
-      <div className="app-header">
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Hand style={{ width: 24, height: 24, color: "#facc15" }} />
-          <span style={{ fontSize: "1.3rem", fontWeight: 900, color: "#facc15" }}>OIRTE AI</span>
+      <div style={S.header}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Hand style={{ width: 22, height: 22, color: "#facc15" }} />
+          <span style={{ fontSize: "1.2rem", fontWeight: 900, color: "#facc15" }}>OIRTE AI</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: "0.8rem", color: "#a1a1aa", fontWeight: 700 }}>👤 {userName}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: "0.75rem", color: "#a1a1aa", fontWeight: 700 }}>👤 {userName}</span>
           <button
             onClick={isDemoUser ? disableDemoMode : enableDemoMode}
             style={{
-              padding: "5px 12px",
-              borderRadius: 10,
-              fontSize: "0.75rem",
-              fontWeight: 800,
+              padding: "4px 10px", borderRadius: 8, fontSize: "0.7rem", fontWeight: 800,
               border: `2px solid ${isDemoUser ? "#facc15" : "#52525b"}`,
               color: isDemoUser ? "#facc15" : "#a1a1aa",
-              background: isDemoUser ? "#27272a" : "transparent",
-              cursor: "pointer",
+              background: isDemoUser ? "#27272a" : "transparent", cursor: "pointer",
             }}
           >
             {isDemoUser ? "✅ DEMO" : "DEMO"}
@@ -246,34 +285,29 @@ export default function Home() {
       </div>
 
       {/* ── Body ── */}
-      <div className="app-body">
+      <div style={S.body}>
 
         {/* ═══ CHAT TAB ═══ */}
         {tab === "chat" && (
-          <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "calc(100dvh - 54px - 64px)" }}>
+          <div style={{ display: "flex", flexDirection: "column", minHeight: "100%" }}>
 
-            {/* Chat messages */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "12px 12px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Messages area */}
+            <div style={{ flex: 1, padding: "12px 10px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
 
               {messages.length === 0 && !isListening && !transcript && (
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "40px 20px", gap: 12 }}>
-                  <Hand style={{ width: 48, height: 48, color: "#facc15", opacity: 0.3 }} />
-                  <p style={{ fontSize: "1.2rem", color: "#71717a", fontWeight: 700 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "30px 16px", gap: 10 }}>
+                  <Hand style={{ width: 44, height: 44, color: "#facc15", opacity: 0.3 }} />
+                  <p style={{ fontSize: "1.1rem", color: "#71717a", fontWeight: 700 }}>
                     Presiona <span style={{ color: "#facc15" }}>ESCUCHAR</span> para captar voces
-                    o usa la casilla para <span style={{ color: "#facc15" }}>ESCRIBIR</span>
+                    o <span style={{ color: "#facc15" }}>ESCRÍBEME</span> abajo
                   </p>
                 </div>
               )}
 
               {messages.map(m => (
                 <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: m.type === "said" ? "flex-end" : "flex-start" }}>
-                  <div className={`chat-bubble ${m.type === "heard" ? "chat-heard" :
-                      m.type === "said" ? "chat-said" :
-                        m.type === "ai" ? "chat-ai" : "chat-system"
-                    }`}>
-                    {m.text}
-                  </div>
-                  <span style={{ fontSize: "0.65rem", color: "#52525b", marginTop: 2, paddingLeft: 4 }}>
+                  <div style={S.bubble(m.type)}>{m.text}</div>
+                  <span style={{ fontSize: "0.6rem", color: "#52525b", marginTop: 2, paddingInlineStart: 4 }}>
                     {m.type === "heard" ? "🔊 Escuchado" : m.type === "said" ? "💬 Enviado" : ""}
                     {" "}{m.time}
                   </span>
@@ -283,11 +317,20 @@ export default function Home() {
               {/* Live transcript while listening */}
               {isListening && transcript && (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
-                  <div className="chat-bubble chat-heard" style={{ opacity: 0.8 }}>
-                    {transcript}
-                  </div>
+                  <div style={{ ...S.bubble("heard"), opacity: 0.85 }}>{transcript}</div>
                   <span style={{ fontSize: "0.7rem", color: "#facc15", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
-                    <span className="live-dot" /> Escuchando en vivo...
+                    <span style={{ width: 8, height: 8, background: "#ef4444", borderRadius: "50%", display: "inline-block", animation: "blink 1s infinite" }} />
+                    Escuchando en vivo...
+                  </span>
+                </div>
+              )}
+
+              {/* Show captured text AFTER stopping (before AI responds) */}
+              {!isListening && transcript && !isThinking && responses.length === 0 && (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                  <div style={{ ...S.bubble("heard"), border: "2px dashed #facc15" }}>{transcript}</div>
+                  <span style={{ fontSize: "0.7rem", color: "#a1a1aa", marginTop: 2 }}>
+                    ✅ Texto capturado — esperando respuesta IA...
                   </span>
                 </div>
               )}
@@ -295,36 +338,26 @@ export default function Home() {
               {/* AI suggestions */}
               {(responses.length > 0 || isThinking) && (
                 <div style={{ padding: 10, background: "#18181b", borderRadius: 14, border: "1px solid #27272a", marginTop: 4 }}>
-                  <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "#71717a", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                    <MessageSquare style={{ width: 16, height: 16, color: "#22c55e" }} /> Respuestas sugeridas:
+                  <p style={{ fontSize: "0.8rem", fontWeight: 700, color: "#71717a", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <MessageSquare style={{ width: 14, height: 14, color: "#22c55e" }} /> Respuestas sugeridas:
                   </p>
                   {isThinking ? (
-                    <p style={{ textAlign: "center", padding: 16, fontSize: "1.1rem", color: "#71717a" }}>🧠 Pensando...</p>
+                    <p style={{ textAlign: "center", padding: 14, fontSize: "1rem", color: "#71717a" }}>🧠 Pensando...</p>
                   ) : responses.map((r, i) => (
                     <button
                       key={i}
                       onClick={() => selectResponse(r, i)}
                       style={{
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "12px 14px",
-                        borderRadius: 12,
+                        width: "100%", textAlign: "left", padding: "11px 12px", borderRadius: 12,
                         border: `2px solid ${speakIdx === i ? "#facc15" : "#3f3f46"}`,
                         background: speakIdx === i ? "#facc15" : "#27272a",
                         color: speakIdx === i ? "#18181b" : "#fafafa",
-                        fontSize: "1.2rem",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        marginBottom: 6,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        transition: "all 0.12s",
+                        fontSize: "1.15rem", fontWeight: 700, cursor: "pointer", marginBottom: 5,
+                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
                       }}
                     >
                       <span style={{ flex: 1 }}>{r}</span>
-                      <Volume2 style={{ width: 18, height: 18, opacity: 0.5, flexShrink: 0 }} />
+                      <Volume2 style={{ width: 16, height: 16, opacity: 0.5, flexShrink: 0 }} />
                     </button>
                   ))}
                 </div>
@@ -334,92 +367,44 @@ export default function Home() {
             </div>
 
             {/* ── Bottom controls ── */}
-            <div style={{ flexShrink: 0, background: "#18181b", borderTop: "1px solid #27272a", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ flexShrink: 0, background: "#18181b", borderTop: "1px solid #27272a", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
 
-              {/* Write what you heard */}
-              <div style={{ display: "flex", gap: 6 }}>
+              {/* "Write what you heard" box */}
+              <div style={{ display: "flex", gap: 5 }}>
                 <input
                   value={heardInput}
                   onChange={(e) => setHeardInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") sendHeardText(); }}
-                  placeholder="✏️ Escribe lo que escuchaste..."
-                  style={{
-                    flex: 1, background: "#27272a", border: "2px solid #3f3f46", borderRadius: 12,
-                    padding: "10px 12px", fontSize: "1rem", fontWeight: 700, color: "#fafafa",
-                    outline: "none",
-                  }}
+                  placeholder="¡Escríbeme aquí! ✏️"
+                  style={S.input}
                 />
-                <button
-                  onClick={sendHeardText}
-                  disabled={!heardInput.trim()}
-                  style={{
-                    width: 48, height: 48, borderRadius: 12, background: "#22c55e", color: "#fff",
-                    display: "flex", alignItems: "center", justifyContent: "center", border: "none",
-                    cursor: "pointer", opacity: heardInput.trim() ? 1 : 0.3,
-                  }}
-                >
-                  <Send style={{ width: 20, height: 20 }} />
+                <button onClick={sendHeardText} disabled={!heardInput.trim()} style={S.sendBtn("#22c55e", !!heardInput.trim())}>
+                  <Send style={{ width: 18, height: 18 }} />
                 </button>
               </div>
 
-              {/* Mic + IA row */}
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  onClick={toggleListening}
-                  disabled={!isSupported}
-                  className={isListening ? "mic-pulse" : ""}
-                  style={{
-                    flex: 1, padding: "14px 0", borderRadius: 16, fontWeight: 800, fontSize: "1.2rem",
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                    background: isListening ? "#dc2626" : "#facc15",
-                    color: isListening ? "#fff" : "#422006",
-                    border: "none", cursor: "pointer",
-                    opacity: isSupported ? 1 : 0.4,
-                  }}
-                >
-                  {isListening ? <MicOff style={{ width: 22, height: 22 }} /> : <Mic style={{ width: 22, height: 22 }} />}
-                  {isListening ? "PARAR" : "🎤 ESCUCHAR"}
-                </button>
-
-                {transcript && !isListening && (
-                  <button
-                    onClick={analyzeTranscript}
-                    disabled={isThinking}
-                    style={{
-                      padding: "14px 20px", borderRadius: 16, background: "#22c55e", color: "#fff",
-                      fontWeight: 800, fontSize: "1.1rem", border: "none", cursor: "pointer",
-                      display: "flex", alignItems: "center", gap: 6,
-                    }}
-                  >
-                    <Send style={{ width: 18, height: 18 }} /> IA
-                  </button>
-                )}
-              </div>
+              {/* Mic button */}
+              <button
+                onClick={toggleListening}
+                disabled={!isSupported}
+                className={isListening ? "mic-pulse" : ""}
+                style={{ ...S.micBtn(isListening), opacity: isSupported ? 1 : 0.4 }}
+              >
+                {isListening ? <MicOff style={{ width: 22, height: 22 }} /> : <Mic style={{ width: 22, height: 22 }} />}
+                {isListening ? "🛑 PARAR" : "🎤 ESCUCHAR"}
+              </button>
 
               {/* Manual reply */}
-              <div style={{ display: "flex", gap: 6 }}>
+              <div style={{ display: "flex", gap: 5 }}>
                 <input
-                  ref={replyRef as any}
                   value={manualReply}
                   onChange={(e) => setManualReply(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
-                  placeholder="💬 Tu respuesta manual..."
-                  style={{
-                    flex: 1, background: "#27272a", border: "2px solid #3f3f46", borderRadius: 12,
-                    padding: "10px 12px", fontSize: "1rem", fontWeight: 700, color: "#fafafa",
-                    outline: "none",
-                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendReply(); } }}
+                  placeholder="💬 Tu respuesta..."
+                  style={S.input}
                 />
-                <button
-                  onClick={sendReply}
-                  disabled={!manualReply.trim()}
-                  style={{
-                    width: 48, height: 48, borderRadius: 12, background: "#facc15", color: "#422006",
-                    display: "flex", alignItems: "center", justifyContent: "center", border: "none",
-                    cursor: "pointer", opacity: manualReply.trim() ? 1 : 0.3,
-                  }}
-                >
-                  <Send style={{ width: 20, height: 20 }} />
+                <button onClick={sendReply} disabled={!manualReply.trim()} style={S.sendBtn("#facc15", !!manualReply.trim())}>
+                  <Send style={{ width: 18, height: 18 }} />
                 </button>
               </div>
             </div>
@@ -429,20 +414,26 @@ export default function Home() {
         {/* ═══ PHOTOS TAB ═══ */}
         {tab === "photos" && (
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
-              <ImageIcon style={{ width: 28, height: 28, color: "#facc15" }} /> Analizar Foto
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <ImageIcon style={{ width: 26, height: 26, color: "#facc15" }} /> Analizar Foto
             </h2>
-            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
+            <label style={{ ...S.btnHuge, position: "relative", opacity: mediaLoading ? 0.6 : 1 }}>
               <input type="file" accept="image/*" capture="environment" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handlePhoto} disabled={mediaLoading} />
-              <Camera style={{ width: 24, height: 24 }} />
+              <Camera style={{ width: 22, height: 22 }} />
               {mediaLoading ? "⏳ ANALIZANDO..." : "📸 TOMAR O SUBIR FOTO"}
+            </label>
+            {/* Option to choose from gallery (no capture) */}
+            <label style={{ ...S.btnHuge, position: "relative", opacity: mediaLoading ? 0.6 : 1, background: "#1a1a2e", border: "2px solid #3f3f46" }}>
+              <input type="file" accept="image/*" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handlePhoto} disabled={mediaLoading} />
+              <ImageIcon style={{ width: 22, height: 22 }} />
+              🖼️ ELEGIR DE GALERÍA
             </label>
             {preview && <img src={preview} alt="" style={{ borderRadius: 14, maxHeight: 200, objectFit: "cover", width: "100%", border: "2px solid #27272a" }} />}
             {summary && (
-              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
-                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
-                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
-                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
+              <div style={S.resultBox}>
+                <p style={{ fontSize: "1.3rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} style={{ ...S.btnHuge, marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 20, height: 20 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
@@ -452,21 +443,37 @@ export default function Home() {
         {/* ═══ DOCS TAB ═══ */}
         {tab === "docs" && (
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
-              <FileText style={{ width: 28, height: 28, color: "#facc15" }} /> Analizar Documento
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <FileText style={{ width: 26, height: 26, color: "#facc15" }} /> Analizar Documento
             </h2>
-            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
-              <input type="file" accept="image/*,.pdf" capture="environment" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handleDoc} disabled={mediaLoading} />
-              <FileText style={{ width: 24, height: 24 }} />
-              {mediaLoading ? "⏳ LEYENDO..." : "📄 SUBIR DOCUMENTO"}
+            <p style={{ fontSize: "0.9rem", color: "#a1a1aa" }}>
+              Sube una foto de documento, PDF, TXT, Word, o cualquier archivo de texto.
+            </p>
+            {/* Photo of document */}
+            <label style={{ ...S.btnHuge, position: "relative", opacity: mediaLoading ? 0.6 : 1 }}>
+              <input type="file" accept="image/*" capture="environment" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handleDoc} disabled={mediaLoading} />
+              <Camera style={{ width: 22, height: 22 }} />
+              {mediaLoading ? "⏳ LEYENDO..." : "📷 FOTO DE DOCUMENTO"}
+            </label>
+            {/* File upload for text documents */}
+            <label style={{ ...S.btnHuge, position: "relative", opacity: mediaLoading ? 0.6 : 1, background: "#1a1a2e", border: "2px solid #3f3f46" }}>
+              <input
+                type="file"
+                accept=".pdf,.txt,.md,.doc,.docx,.csv,.json,.xml,.html,.rtf,.log,image/*,application/pdf,text/*"
+                style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+                onChange={handleDoc}
+                disabled={mediaLoading}
+              />
+              <FileText style={{ width: 22, height: 22 }} />
+              📄 SUBIR ARCHIVO / PDF
             </label>
             {preview && <img src={preview} alt="" style={{ borderRadius: 14, maxHeight: 200, objectFit: "cover", width: "100%", border: "2px solid #27272a" }} />}
             {summary && (
-              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
-                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "1rem", marginBottom: 6 }}>📄 Resumen:</h3>
-                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
-                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
-                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
+              <div style={S.resultBox}>
+                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "0.9rem", marginBottom: 6 }}>📄 Resumen:</h3>
+                <p style={{ fontSize: "1.3rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} style={{ ...S.btnHuge, marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 20, height: 20 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
@@ -476,29 +483,30 @@ export default function Home() {
         {/* ═══ AUDIO TAB ═══ */}
         {tab === "audio" && (
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
-              <Music style={{ width: 28, height: 28, color: "#facc15" }} /> Transcribir Audio
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <Music style={{ width: 26, height: 26, color: "#facc15" }} /> Transcribir Audio
             </h2>
-            <p style={{ fontSize: "1rem", color: "#a1a1aa" }}>
-              Sube un audio corto (máximo ~30 seg / 3 MB) y Gemini lo transcribirá a texto.
+            <p style={{ fontSize: "0.9rem", color: "#a1a1aa" }}>
+              Sube un audio o video corto (máx ~30 seg / 3 MB). Gemini lo transcribirá a texto.
+              Si es música, intentará transcribir la letra.
             </p>
-            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
+            <label style={{ ...S.btnHuge, position: "relative", opacity: mediaLoading ? 0.6 : 1 }}>
               <input
                 type="file"
-                accept="audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,audio/aac,audio/flac,audio/x-m4a,video/mp4,video/webm,video/quicktime,.mp3,.m4a,.ogg,.wav,.aac,.flac,.mp4,.mov,.webm"
+                accept="audio/*,video/*,.mp3,.m4a,.ogg,.wav,.aac,.flac,.mp4,.mov,.webm,.3gp"
                 style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
                 onChange={handleAudio}
                 disabled={mediaLoading}
               />
-              <Music style={{ width: 24, height: 24 }} />
+              <Music style={{ width: 22, height: 22 }} />
               {mediaLoading ? "⏳ TRANSCRIBIENDO..." : "🎵 SUBIR AUDIO O VIDEO"}
             </label>
             {summary && (
-              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
-                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "1rem", marginBottom: 6 }}>📝 Transcripción:</h3>
-                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
-                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
-                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
+              <div style={S.resultBox}>
+                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "0.9rem", marginBottom: 6 }}>📝 Transcripción:</h3>
+                <p style={{ fontSize: "1.3rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} style={{ ...S.btnHuge, marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 20, height: 20 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
@@ -508,12 +516,12 @@ export default function Home() {
         {/* ═══ CONTACTS TAB ═══ */}
         {tab === "contacts" && (
           <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
-              <Phone style={{ width: 28, height: 28, color: "#facc15" }} /> Contactos
+            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <Phone style={{ width: 26, height: 26, color: "#facc15" }} /> Contactos
             </h2>
             {contacts.map(c => (
               <a key={c.id} href={`https://wa.me/${c.phone}`} target="_blank" rel="noopener noreferrer"
-                className="btn-huge" style={{ background: "#14532d", border: "2px solid #166534", color: "#fff", textDecoration: "none" }}>
+                style={{ ...S.btnHuge, background: "#14532d", border: "2px solid #166534", color: "#fff", textDecoration: "none" }}>
                 📱 {c.name.toUpperCase()}
               </a>
             ))}
@@ -522,19 +530,15 @@ export default function Home() {
       </div>
 
       {/* ── Tab Bar ── */}
-      <nav className="tab-bar">
+      <nav style={S.tabBar}>
         {([
-          { k: "chat" as TabKey, icon: <MessageSquare />, label: "Chat" },
-          { k: "photos" as TabKey, icon: <ImageIcon />, label: "Fotos" },
-          { k: "docs" as TabKey, icon: <FileText />, label: "Docs" },
-          { k: "audio" as TabKey, icon: <Music />, label: "Audio" },
-          { k: "contacts" as TabKey, icon: <Phone />, label: "Contactos" },
+          { k: "chat" as TabKey, icon: <MessageSquare style={S.tabIcon} />, label: "Chat" },
+          { k: "photos" as TabKey, icon: <ImageIcon style={S.tabIcon} />, label: "Fotos" },
+          { k: "docs" as TabKey, icon: <FileText style={S.tabIcon} />, label: "Docs" },
+          { k: "audio" as TabKey, icon: <Music style={S.tabIcon} />, label: "Audio" },
+          { k: "contacts" as TabKey, icon: <Phone style={S.tabIcon} />, label: "Contactos" },
         ]).map(t => (
-          <button
-            key={t.k}
-            onClick={() => { setTab(t.k); setSummary(null); setPreview(null); }}
-            className={`tab-btn ${tab === t.k ? "active" : ""}`}
-          >
+          <button key={t.k} onClick={() => { setTab(t.k); setSummary(null); setPreview(null); }} style={S.tabBtn(tab === t.k)}>
             {t.icon}
             <span>{t.label}</span>
           </button>

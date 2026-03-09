@@ -80,9 +80,24 @@ IMPORTANTE: Devuelve SOLO un arreglo JSON, sin explicaciones ni markdown. Ejempl
             return NextResponse.json({ summary: summary.trim(), model });
         }
 
-        // ── Audio analysis ──
+        // ── Plain text document (txt, md, etc.) ──
+        if (body.docText) {
+            const prompt = `Lee y resume este documento en máximo 3 oraciones simples en español. 
+Si tiene datos importantes (fechas, montos, nombres) inclúyelos.
+Documento:
+"""
+${body.docText.slice(0, 8000)}
+"""`;
+            const contents = [{ role: "user", parts: [{ text: prompt }] }];
+            const { text: summary, model } = await tryModels(apiKey, contents);
+            return NextResponse.json({ summary: summary.trim(), model });
+        }
+
+        // ── Audio/Video transcription ──
         if (body.audio && body.audioMimeType) {
-            const prompt = "Transcribe el siguiente audio a texto en español. Si hay varias personas hablando, indica quién dice qué. Devuelve solo el texto transcrito.";
+            const prompt = body.audioMimeType.startsWith("video/")
+                ? "Transcribe el audio de este video a texto en español. Si hay varias personas hablando, indica quién dice qué. Si es música, transcribe la letra. Devuelve solo el texto transcrito."
+                : "Transcribe el siguiente audio a texto en español. Si hay varias personas hablando, indica quién dice qué. Si es música, transcribe la letra, versos y coros. Devuelve solo el texto transcrito.";
 
             const contents = [{
                 role: "user",
@@ -95,7 +110,7 @@ IMPORTANTE: Devuelve SOLO un arreglo JSON, sin explicaciones ni markdown. Ejempl
             return NextResponse.json({ transcription: transcription.trim(), model });
         }
 
-        return NextResponse.json({ error: "Falta texto, imagen o audio" }, { status: 400 });
+        return NextResponse.json({ error: "Falta texto, imagen, documento o audio" }, { status: 400 });
 
     } catch (error: any) {
         console.error("❌ Gemini Error:", error.message);
