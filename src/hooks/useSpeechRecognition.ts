@@ -1,8 +1,8 @@
-"use client"; // must be a client-side hook
+"use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-type UseSpeechRecognitionReturn = {
+type UseSpeechReturn = {
     isListening: boolean;
     transcript: string;
     isSupported: boolean;
@@ -11,110 +11,95 @@ type UseSpeechRecognitionReturn = {
     setTranscript: React.Dispatch<React.SetStateAction<string>>;
 };
 
-export function useSpeechRecognition(): UseSpeechRecognitionReturn {
+/**
+ * Auto-stop after SILENCE_TIMEOUT_MS of no new speech results.
+ */
+const SILENCE_TIMEOUT_MS = 4000; // 4 seconds
+
+export function useSpeechRecognition(onAutoStop?: (finalText: string) => void): UseSpeechReturn {
     const [isListening, setIsListening] = useState(false);
     const [transcript, setTranscript] = useState("");
     const [isSupported, setIsSupported] = useState(false);
     const recognitionRef = useRef<any>(null);
-    const finalTranscriptRef = useRef<string>("");
+    const finalRef = useRef("");
+    const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const autoStopCb = useRef(onAutoStop);
+
+    // Keep callback ref updated
+    useEffect(() => { autoStopCb.current = onAutoStop; }, [onAutoStop]);
+
+    const clearSilenceTimer = () => {
+        if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
+    };
+
+    const resetSilenceTimer = useCallback(() => {
+        clearSilenceTimer();
+        silenceTimer.current = setTimeout(() => {
+            // Auto-stop after silence
+            if (recognitionRef.current && finalRef.current.trim()) {
+                try { recognitionRef.current.stop(); } catch { }
+                const text = finalRef.current.trim();
+                autoStopCb.current?.(text);
+            }
+        }, SILENCE_TIMEOUT_MS);
+    }, []);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
 
-        const SpeechRecognition =
-            (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-        if (!SpeechRecognition) {
-            console.warn("SpeechRecognition API not supported in this browser.");
-            setIsSupported(false);
-            return;
-        }
-
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SR) { setIsSupported(false); return; }
         setIsSupported(true);
 
-        const recognition = new SpeechRecognition();
-        recognition.lang = "es-ES";
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
+        const r = new SR();
+        r.lang = "es-ES";
+        r.continuous = true;
+        r.interimResults = true;
+        r.maxAlternatives = 1;
 
-        recognition.onstart = () => {
-            console.log("🎤 Speech recognition started");
-            setIsListening(true);
-            finalTranscriptRef.current = "";
-        };
+        r.onstart = () => { setIsListening(true); finalRef.current = ""; };
 
-        recognition.onresult = (event: any) => {
-            let interimTranscript = "";
+        r.onresult = (ev: any) => {
+            let interim = "";
             let newFinal = "";
-
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                const result = event.results[i];
-                if (result.isFinal) {
-                    newFinal += result[0].transcript;
-                } else {
-                    interimTranscript += result[0].transcript;
-                }
+            for (let i = ev.resultIndex; i < ev.results.length; i++) {
+                if (ev.results[i].isFinal) newFinal += ev.results[i][0].transcript;
+                else interim += ev.results[i][0].transcript;
             }
-
-            if (newFinal) {
-                finalTranscriptRef.current += newFinal;
-            }
-
-            const fullTranscript = (finalTranscriptRef.current + interimTranscript).trim();
-            setTranscript(fullTranscript);
+            if (newFinal) finalRef.current += newFinal;
+            setTranscript((finalRef.current + interim).trim());
+            resetSilenceTimer(); // restart the silence countdown
         };
 
-        recognition.onerror = (event: any) => {
-            console.error("Speech recognition error:", event.error);
+        r.onerror = (ev: any) => {
+            clearSilenceTimer();
             setIsListening(false);
-
-            if (event.error === "not-allowed" || event.error === "permission-denied") {
-                alert(
-                    "⚠️ Permiso de micrófono denegado.\nPor favor permite el acceso al micrófono en la barra de direcciones del navegador y recarga la página."
-                );
-            } else if (event.error === "no-speech") {
-                // Silently handle no-speech — user just didn't speak yet
+            if (ev.error === "not-allowed" || ev.error === "permission-denied") {
+                alert("⚠️ Permiso de micrófono denegado. Habilítalo en la barra del navegador.");
             }
         };
 
-        recognition.onend = () => {
-            console.log("🎤 Speech recognition ended");
-            setIsListening(false);
-        };
+        r.onend = () => { clearSilenceTimer(); setIsListening(false); };
 
-        recognitionRef.current = recognition;
-
-        return () => {
-            try {
-                recognitionRef.current?.stop();
-            } catch { }
-        };
-    }, []);
+        recognitionRef.current = r;
+        return () => { clearSilenceTimer(); try { r.stop(); } catch { } };
+    }, [resetSilenceTimer]);
 
     const toggleListening = useCallback(() => {
         if (!recognitionRef.current) return;
-
         if (isListening) {
+            clearSilenceTimer();
             recognitionRef.current.stop();
-            setIsListening(false);
         } else {
-            finalTranscriptRef.current = "";
+            finalRef.current = "";
             setTranscript("");
-            try {
-                recognitionRef.current.start();
-            } catch (e) {
-                console.warn("Recognition start error:", e);
-                // Re-create if needed
-            }
+            try { recognitionRef.current.start(); } catch { }
         }
     }, [isListening]);
 
     const stopListening = useCallback(() => {
-        if (isListening && recognitionRef.current) {
-            recognitionRef.current.stop();
-            setIsListening(false);
-        }
+        clearSilenceTimer();
+        if (isListening && recognitionRef.current) { recognitionRef.current.stop(); }
     }, [isListening]);
 
     return { isListening, transcript, isSupported, toggleListening, stopListening, setTranscript };

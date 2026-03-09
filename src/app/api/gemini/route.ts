@@ -1,13 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Using REST API directly — more reliable than the SDK for model availability
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-// Models to try in order of preference (fallback chain)
-const MODELS = [
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro",
-];
+const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
 
 async function callGemini(apiKey: string, model: string, contents: object[]) {
     const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
@@ -17,98 +11,94 @@ async function callGemini(apiKey: string, model: string, contents: object[]) {
         body: JSON.stringify({ contents }),
     });
     const json = await res.json();
-    if (!res.ok) {
-        throw new Error(json.error?.message || `HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(json.error?.message || `HTTP ${res.status}`);
     return json.candidates?.[0]?.content?.parts?.[0]?.text || "";
 }
 
-async function callGeminiFallback(apiKey: string, contents: object[]) {
-    let lastError = "";
-    for (const model of MODELS) {
+async function tryModels(apiKey: string, contents: object[]) {
+    let lastErr = "";
+    for (const m of MODELS) {
         try {
-            const text = await callGemini(apiKey, model, contents);
-            return { text, model };
-        } catch (err: any) {
-            lastError = err.message;
-            console.warn(`Model ${model} failed:`, err.message);
+            const text = await callGemini(apiKey, m, contents);
+            return { text, model: m };
+        } catch (e: any) {
+            lastErr = e.message;
+            console.warn(`Model ${m} failed:`, e.message);
         }
     }
-    throw new Error("All Gemini models failed. Last error: " + lastError);
+    throw new Error("Todos los modelos fallaron: " + lastErr);
 }
 
 export async function POST(req: NextRequest) {
     try {
         const apiKey = (process.env.GEMINI_API_KEY || "").trim().replace(/^["']|["']$/g, "");
-
         if (!apiKey) {
-            return NextResponse.json(
-                { error: "GEMINI_API_KEY no encontrada en .env.local" },
-                { status: 500 }
-            );
+            return NextResponse.json({ error: "GEMINI_API_KEY no encontrada" }, { status: 500 });
         }
 
         const body = await req.json();
 
-        // ── Text analysis mode ──────────────────────────────────────────────
+        // ── Text → 3 suggested responses ──
         if (body.text) {
-            const prompt = `Eres un asistente de comunicación para personas sordas. 
-Analiza el siguiente texto hablado. Detecta el tono y sentimiento. 
+            const prompt = `Eres un asistente de comunicación para personas sordas.
+Analiza el siguiente texto hablado. Detecta el tono y sentimiento.
 Devuelve EXACTAMENTE 3 respuestas cortas, amables y naturales en español que la persona sorda puede usar para responder.
 Texto: "${body.text}"
-IMPORTANTE: Devuelve SOLO el arreglo JSON, sin explicaciones, sin markdown, sin bloques de código. Ejemplo:
-["¡Claro que sí!", "Muchas gracias.", "Entendido, no te preocupes."]`;
+IMPORTANTE: Devuelve SOLO un arreglo JSON, sin explicaciones ni markdown. Ejemplo:
+["¡Claro que sí!", "Muchas gracias.", "Entendido."]`;
 
             const contents = [{ role: "user", parts: [{ text: prompt }] }];
-            const { text: raw, model } = await callGeminiFallback(apiKey, contents);
+            const { text: raw, model } = await tryModels(apiKey, contents);
 
-            let cleaned = raw.trim();
-            // Strip markdown code blocks if present
-            cleaned = cleaned.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").trim();
-
+            let cleaned = raw.trim().replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").trim();
             let responses: string[];
             try {
                 responses = JSON.parse(cleaned);
-                if (!Array.isArray(responses)) throw new Error("Not an array");
+                if (!Array.isArray(responses)) throw new Error("not array");
             } catch {
-                console.warn("Could not parse Gemini JSON, raw:", raw);
-                // Extract lines as fallback
-                responses = cleaned
-                    .split("\n")
-                    .filter((l) => l.trim())
-                    .slice(0, 3)
-                    .map((l) => l.replace(/^["'\d.\-\s]+/, "").replace(/["']$/, ""));
+                responses = cleaned.split("\n").filter((l: string) => l.trim()).slice(0, 3)
+                    .map((l: string) => l.replace(/^["'\d.\-\s]+/, "").replace(/["']$/, ""));
                 if (responses.length === 0) responses = ["Sí, entiendo.", "No te preocupes.", "Gracias."];
             }
-
-            console.log(`✅ Gemini (${model}) responded with`, responses.length, "suggestions");
             return NextResponse.json({ responses, model });
         }
 
-        // ── Image analysis mode ─────────────────────────────────────────────
+        // ── Image analysis ──
         if (body.image && body.mimeType) {
-            const prompt =
-                "Analiza esta imagen. Si es un documento, lee su contenido principal. Si es una foto, describe qué muestra. Responde en español con máximo 2 oraciones simples, pensando en que la persona que lee puede ser sorda o de la tercera edad.";
+            const prompt = body.docMode
+                ? "Lee y resume este documento en máximo 3 oraciones simples en español. Si tiene datos importantes (fechas, montos, nombres) inclúyelos."
+                : "Describe esta imagen en máximo 2 oraciones simples en español, para una persona sorda o de la tercera edad.";
 
-            const contents = [
-                {
-                    role: "user",
-                    parts: [
-                        { text: prompt },
-                        { inlineData: { mimeType: body.mimeType, data: body.image } },
-                    ],
-                },
-            ];
-
-            const { text: summary, model } = await callGeminiFallback(apiKey, contents);
-            console.log(`✅ Gemini image (${model}):`, summary.slice(0, 80));
+            const contents = [{
+                role: "user",
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: body.mimeType, data: body.image } },
+                ],
+            }];
+            const { text: summary, model } = await tryModels(apiKey, contents);
             return NextResponse.json({ summary: summary.trim(), model });
         }
 
-        return NextResponse.json({ error: "Falta texto o imagen en la solicitud" }, { status: 400 });
+        // ── Audio analysis ──
+        if (body.audio && body.audioMimeType) {
+            const prompt = "Transcribe el siguiente audio a texto en español. Si hay varias personas hablando, indica quién dice qué. Devuelve solo el texto transcrito.";
+
+            const contents = [{
+                role: "user",
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: body.audioMimeType, data: body.audio } },
+                ],
+            }];
+            const { text: transcription, model } = await tryModels(apiKey, contents);
+            return NextResponse.json({ transcription: transcription.trim(), model });
+        }
+
+        return NextResponse.json({ error: "Falta texto, imagen o audio" }, { status: 400 });
 
     } catch (error: any) {
-        console.error("❌ Gemini API Error:", error.message);
+        console.error("❌ Gemini Error:", error.message);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

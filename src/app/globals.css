@@ -1,31 +1,33 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-background: #09090b; /* Zinc 950 */
-  --color-foreground: #fafafa; /* Zinc 50 */
-  --color-primary: #facc15; /* Yellow 400 for high contrast accents */
-  --color-primary-foreground: #422006; /* Yellow 950 for text on primary */
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  --color-primary: #facc15;
+  --color-primary-foreground: #422006;
 }
 
-/* Force dark mode and high contrast globally */
 :root {
   --background: #09090b;
   --foreground: #fafafa;
+  --tab-height: 72px;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  /* Increase base font size for accessibility */
-  font-size: 1.25rem;
-  line-height: 1.5;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 1.15rem;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: contain;
+  overflow: hidden;
+  height: 100dvh;
 }
 
-/* Base button styles for huge accessible buttons */
+/* Accessible huge buttons */
 .btn-huge {
-  @apply w-full py-6 px-8 rounded-2xl font-bold text-3xl transition-transform active:scale-95 flex items-center justify-center gap-4;
+  @apply w-full py-5 px-6 rounded-2xl font-bold text-2xl sm:text-3xl transition-transform active:scale-95 flex items-center justify-center gap-3;
 }
 
 .btn-primary {
@@ -33,5 +35,86 @@ body {
 }
 
 .btn-secondary {
-  @apply bg-zinc-800 text-white shadow-md border-2 border-zinc-700 hover:border-zinc-500;
+  @apply bg-zinc-800 text-white shadow-md border-2 border-zinc-700;
+}
+
+/* Bottom tab bar */
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--tab-height);
+  background: #18181b;
+  border-top: 2px solid #27272a;
+  display: flex;
+  z-index: 100;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tab-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #71717a;
+  transition: color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab-btn.active {
+  color: #facc15;
+}
+
+.tab-btn svg {
+  width: 26px;
+  height: 26px;
+}
+
+/* Chat messages */
+.chat-bubble {
+  @apply rounded-2xl px-4 py-3 max-w-[85%] text-2xl font-bold leading-snug;
+}
+
+.chat-heard {
+  @apply bg-zinc-800 text-white self-start border-l-4 border-yellow-400;
+}
+
+.chat-said {
+  @apply bg-yellow-400 text-zinc-900 self-end;
+}
+
+.chat-ai {
+  @apply bg-zinc-700 text-white self-start border-l-4 border-green-500;
+}
+
+/* Scrollable content area */
+.app-content {
+  height: calc(100dvh - var(--tab-height));
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Pulse animation for mic */
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.5);
+  }
+
+  70% {
+    box-shadow: 0 0 0 20px rgba(250, 204, 21, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+  }
+}
+
+.mic-pulse {
+  animation: pulse-ring 1.5s infinite;
 }
