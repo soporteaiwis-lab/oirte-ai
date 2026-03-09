@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #09090b; /* Zinc 950 */
+  --color-foreground: #fafafa; /* Zinc 50 */
+  --color-primary: #facc15; /* Yellow 400 for high contrast accents */
+  --color-primary-foreground: #422006; /* Yellow 950 for text on primary */
+}
+
+/* Force dark mode and high contrast globally */
+:root {
+  --background: #09090b;
+  --foreground: #fafafa;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  /* Increase base font size for accessibility */
+  font-size: 1.25rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Base button styles for huge accessible buttons */
+.btn-huge {
+  @apply w-full py-6 px-8 rounded-2xl font-bold text-3xl transition-transform active:scale-95 flex items-center justify-center gap-4;
+}
+
+.btn-primary {
+  @apply bg-[#facc15] text-[#422006] shadow-lg;
+}
+
+.btn-secondary {
+  @apply bg-zinc-800 text-white shadow-md border-2 border-zinc-700 hover:border-zinc-500;
+}
