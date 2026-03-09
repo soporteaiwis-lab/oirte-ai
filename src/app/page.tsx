@@ -3,120 +3,100 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   Mic, MicOff, Camera, MessageSquare, Phone, Volume2,
-  Hand, Send, FileText, Music, Image as ImageIcon, Keyboard, X
+  Hand, Send, FileText, Music, Image as ImageIcon
 } from "lucide-react";
 import { useDemoUser } from "@/components/DemoUserProvider";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import contacts from "@/lib/contacts.json";
 
-// ── Types ───────────────────────────────────────────────────────────────
-type ChatMsg = {
-  id: string;
-  type: "heard" | "said" | "ai" | "system";
-  text: string;
-  time: string;
-};
-
+type ChatMsg = { id: string; type: "heard" | "said" | "ai" | "system"; text: string; time: string };
 type TabKey = "chat" | "photos" | "docs" | "audio" | "contacts";
 
-function timeNow() {
-  return new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
-}
+const ts = () => new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
+// Max audio size for Gemini inline data (4 MB base64 ≈ 3 MB file)
+const MAX_AUDIO_BYTES = 3 * 1024 * 1024;
 
-// ──────────────────────────────────────────────────────────────────────
 export default function Home() {
   const { isDemoUser, userName, enableDemoMode, disableDemoMode } = useDemoUser();
   const [tab, setTab] = useState<TabKey>("chat");
-
-  // ─── Chat state ─────────────────────────────────────────────────────
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [responses, setResponses] = useState<string[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
+  const [isThinking, setIsThinking] = useState(false);
+  const [speakIdx, setSpeakIdx] = useState<number | null>(null);
   const [manualReply, setManualReply] = useState("");
+  const [heardInput, setHeardInput] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   const replyRef = useRef<HTMLTextAreaElement>(null);
 
-  // ─── Media state ────────────────────────────────────────────────────
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [mediaSummary, setMediaSummary] = useState<string | null>(null);
-  const [isMediaLoading, setIsMediaLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const docInputRef = useRef<HTMLInputElement>(null);
-  const audioInputRef = useRef<HTMLInputElement>(null);
+  // Media state
+  const [preview, setPreview] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [mediaLoading, setMediaLoading] = useState(false);
 
-  // ─── When speech auto-stops, add the text as a "heard" message ────
+  // Speech recognition with auto-stop callback
   const onAutoStop = useCallback((finalText: string) => {
-    if (!finalText.trim()) return;
-    addMsg("heard", finalText);
-    fetchSuggestions(finalText);
+    if (finalText.trim()) {
+      addMsg("heard", finalText.trim());
+      fetchSuggestions(finalText.trim());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const {
-    isListening, transcript, isSupported, toggleListening, stopListening, setTranscript
-  } = useSpeechRecognition(onAutoStop);
+  const { isListening, transcript, isSupported, toggleListening, stopListening, setTranscript } =
+    useSpeechRecognition(onAutoStop);
 
-  // ─── Scroll to bottom on new messages ─────────────────────────────
+  // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, responses]);
+  }, [messages, responses, transcript]);
 
-  // ─── Save to demo localStorage ────────────────────────────────────
-  const saveHistory = useCallback((entry: string) => {
+  // ── Helpers ───────────────────────────────────────────────────────
+  const save = useCallback((entry: string) => {
     if (!isDemoUser) return;
-    const prev = JSON.parse(localStorage.getItem("oirte_chat_history") || "[]");
-    localStorage.setItem("oirte_chat_history", JSON.stringify([...prev, entry]));
+    const h = JSON.parse(localStorage.getItem("oirte_history") || "[]");
+    localStorage.setItem("oirte_history", JSON.stringify([...h, entry]));
   }, [isDemoUser]);
 
-  // ─── Add a message to the chat ────────────────────────────────────
   const addMsg = useCallback((type: ChatMsg["type"], text: string) => {
-    const msg: ChatMsg = { id: uid(), type, text, time: timeNow() };
-    setMessages(prev => [...prev, msg]);
-    saveHistory(`[${type}] ${text}`);
-    return msg;
-  }, [saveHistory]);
+    setMessages(p => [...p, { id: uid(), type, text, time: ts() }]);
+    save(`[${type}] ${text}`);
+  }, [save]);
 
-  // ─── TTS ──────────────────────────────────────────────────────────
   const speak = useCallback((text: string, idx?: number) => {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "es-ES"; u.rate = 0.92; u.volume = 1;
+    u.lang = "es-ES"; u.rate = 0.9; u.volume = 1;
     if (idx !== undefined) {
-      u.onstart = () => setSpeakingIndex(idx);
-      u.onend = () => setSpeakingIndex(null);
-      u.onerror = () => setSpeakingIndex(null);
+      u.onstart = () => setSpeakIdx(idx);
+      u.onend = () => setSpeakIdx(null);
+      u.onerror = () => setSpeakIdx(null);
     }
     window.speechSynthesis.speak(u);
   }, []);
 
-  // ─── Call Gemini for 3 response suggestions ──────────────────────
+  // ── Gemini: get 3 suggestions ─────────────────────────────────────
   const fetchSuggestions = async (text: string) => {
-    setIsAnalyzing(true);
+    setIsThinking(true);
     setResponses([]);
     try {
-      const res = await fetch("/api/gemini", {
+      const r = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      if (Array.isArray(data.responses)) {
-        setResponses(data.responses);
-      }
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      if (Array.isArray(d.responses)) setResponses(d.responses);
     } catch (e: any) {
       addMsg("system", "❌ Error IA: " + e.message);
     } finally {
-      setIsAnalyzing(false);
+      setIsThinking(false);
     }
   };
 
-  // ─── User selects a suggested response ────────────────────────────
   const selectResponse = (text: string, idx: number) => {
     addMsg("said", text);
     speak(text, idx);
@@ -124,8 +104,8 @@ export default function Home() {
     setTranscript("");
   };
 
-  // ─── User writes a manual reply ───────────────────────────────────
-  const sendManualReply = () => {
+  // ── Send manual reply (user's own text) ─────────────────────────
+  const sendReply = () => {
     const t = manualReply.trim();
     if (!t) return;
     addMsg("said", t);
@@ -134,360 +114,426 @@ export default function Home() {
     setResponses([]);
   };
 
-  // ─── Manual "send heard text" when user clicks Analyze ────────────
-  const manualAnalyze = () => {
+  // ── Send "heard" text manually ──────────────────────────────────
+  const sendHeardText = () => {
+    const t = heardInput.trim();
+    if (!t) return;
+    addMsg("heard", t);
+    fetchSuggestions(t);
+    setHeardInput("");
+  };
+
+  // ── Manual analyze from transcript ─────────────────────────────
+  const analyzeTranscript = () => {
     if (!transcript.trim()) return;
     stopListening();
-    addMsg("heard", transcript);
-    fetchSuggestions(transcript);
+    addMsg("heard", transcript.trim());
+    fetchSuggestions(transcript.trim());
     setTranscript("");
   };
 
-  // ─── Upload photo ─────────────────────────────────────────────────
+  // ── Photo upload ──────────────────────────────────────────────
   const handlePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    setIsMediaLoading(true); setMediaSummary(null);
+    const f = e.target.files?.[0]; if (!f) return;
+    setMediaLoading(true); setSummary(null);
     const reader = new FileReader();
     reader.onloadend = async () => {
       const url = reader.result as string;
-      setImagePreview(url);
+      setPreview(url);
       try {
-        const res = await fetch("/api/gemini", {
+        const r = await fetch("/api/gemini", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: url.split(",")[1], mimeType: file.type }),
+          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        setMediaSummary(data.summary);
-        speak(data.summary);
-      } catch (e: any) { alert("❌ " + e.message); }
-      finally { setIsMediaLoading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setSummary(d.summary); speak(d.summary);
+      } catch (err: any) { alert("❌ " + err.message); }
+      finally { setMediaLoading(false); e.target.value = ""; }
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(f);
   };
 
-  // ─── Upload document ──────────────────────────────────────────────
+  // ── Doc upload ────────────────────────────────────────────────
   const handleDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    setIsMediaLoading(true); setMediaSummary(null); setImagePreview(null);
+    const f = e.target.files?.[0]; if (!f) return;
+    setMediaLoading(true); setSummary(null); setPreview(null);
     const reader = new FileReader();
     reader.onloadend = async () => {
       const url = reader.result as string;
-      setImagePreview(url);
+      setPreview(url);
       try {
-        const res = await fetch("/api/gemini", {
+        const r = await fetch("/api/gemini", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: url.split(",")[1], mimeType: file.type, docMode: true }),
+          body: JSON.stringify({ image: url.split(",")[1], mimeType: f.type, docMode: true }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        setMediaSummary(data.summary);
-        speak(data.summary);
-      } catch (e: any) { alert("❌ " + e.message); }
-      finally { setIsMediaLoading(false); if (docInputRef.current) docInputRef.current.value = ""; }
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+        setSummary(d.summary); speak(d.summary);
+      } catch (err: any) { alert("❌ " + err.message); }
+      finally { setMediaLoading(false); e.target.value = ""; }
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(f);
   };
 
-  // ─── Upload audio ─────────────────────────────────────────────────
+  // ── Audio upload (with size check) ────────────────────────────
   const handleAudio = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]; if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { alert("Máximo 10 MB de audio"); return; }
-    setIsMediaLoading(true); setMediaSummary(null); setImagePreview(null);
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const url = reader.result as string;
-      try {
-        const res = await fetch("/api/gemini", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ audio: url.split(",")[1], audioMimeType: file.type }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        setMediaSummary(data.transcription || data.summary);
-        if (data.transcription) speak(data.transcription);
-      } catch (e: any) { alert("❌ " + e.message); }
-      finally { setIsMediaLoading(false); if (audioInputRef.current) audioInputRef.current.value = ""; }
-    };
-    reader.readAsDataURL(file);
+    const f = e.target.files?.[0]; if (!f) return;
+
+    if (f.size > MAX_AUDIO_BYTES) {
+      alert(`⚠️ El audio es demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nPor favor sube un audio de máximo 30 segundos (~3 MB).`);
+      e.target.value = "";
+      return;
+    }
+
+    setMediaLoading(true); setSummary(null); setPreview(null);
+    try {
+      const buffer = await f.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+
+      const r = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio: base64, audioMimeType: f.type || "audio/mpeg" }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setSummary(d.transcription || d.summary || "No se pudo transcribir.");
+      if (d.transcription) speak(d.transcription);
+    } catch (err: any) {
+      alert("❌ Error al transcribir: " + err.message);
+    } finally {
+      setMediaLoading(false);
+      e.target.value = "";
+    }
   };
 
-  // ═══════════════════════════════════════════════════════════════════
-  // RENDER
-  // ═══════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════
   return (
-    <div className="flex flex-col h-[100dvh] max-w-lg mx-auto relative">
+    <div className="app-shell">
 
-      {/* ─── Fixed Header ─── */}
-      <header className="flex items-center justify-between bg-zinc-900 px-4 py-3 border-b border-zinc-800 shrink-0">
-        <div className="flex items-center gap-2">
-          <Hand className="w-7 h-7 text-yellow-400" />
-          <span className="text-2xl font-black text-yellow-400">OIRTE AI</span>
+      {/* ── Header ── */}
+      <div className="app-header">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Hand style={{ width: 24, height: 24, color: "#facc15" }} />
+          <span style={{ fontSize: "1.3rem", fontWeight: 900, color: "#facc15" }}>OIRTE AI</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-zinc-400 font-bold">👤 {userName}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: "0.8rem", color: "#a1a1aa", fontWeight: 700 }}>👤 {userName}</span>
           <button
             onClick={isDemoUser ? disableDemoMode : enableDemoMode}
-            className={`px-3 py-1.5 rounded-lg text-sm font-bold border transition-colors ${isDemoUser
-                ? "border-yellow-400 text-yellow-400 bg-zinc-800"
-                : "border-zinc-600 text-zinc-400"
-              }`}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 10,
+              fontSize: "0.75rem",
+              fontWeight: 800,
+              border: `2px solid ${isDemoUser ? "#facc15" : "#52525b"}`,
+              color: isDemoUser ? "#facc15" : "#a1a1aa",
+              background: isDemoUser ? "#27272a" : "transparent",
+              cursor: "pointer",
+            }}
           >
             {isDemoUser ? "✅ DEMO" : "DEMO"}
           </button>
         </div>
-      </header>
+      </div>
 
-      {/* ─── Scrollable Content Area ─── */}
-      <div className="app-content flex-1 flex flex-col">
+      {/* ── Body ── */}
+      <div className="app-body">
 
-        {/* ═══════ TAB: CHAT ═══════ */}
+        {/* ═══ CHAT TAB ═══ */}
         {tab === "chat" && (
-          <div className="flex flex-col flex-1">
+          <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "calc(100dvh - 54px - 64px)" }}>
 
-            {/* Chat messages scroll area */}
-            <div className="flex-1 overflow-y-auto px-4 pt-4 pb-2 flex flex-col gap-3">
-              {messages.length === 0 && !isListening && (
-                <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-12 gap-4">
-                  <Hand className="w-16 h-16 text-yellow-400 opacity-40" />
-                  <p className="text-2xl text-zinc-500 font-bold">
-                    Presiona <span className="text-yellow-400">ESCUCHAR</span> para captar voces
-                    o <span className="text-yellow-400">ESCRIBIR</span> lo que te dijeron
+            {/* Chat messages */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "12px 12px 8px", display: "flex", flexDirection: "column", gap: 8 }}>
+
+              {messages.length === 0 && !isListening && !transcript && (
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "40px 20px", gap: 12 }}>
+                  <Hand style={{ width: 48, height: 48, color: "#facc15", opacity: 0.3 }} />
+                  <p style={{ fontSize: "1.2rem", color: "#71717a", fontWeight: 700 }}>
+                    Presiona <span style={{ color: "#facc15" }}>ESCUCHAR</span> para captar voces
+                    o usa la casilla para <span style={{ color: "#facc15" }}>ESCRIBIR</span>
                   </p>
                 </div>
               )}
 
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${msg.type === "said" ? "items-end" : "items-start"}`}
-                >
-                  <div
-                    className={`chat-bubble ${msg.type === "heard" ? "chat-heard" :
-                        msg.type === "said" ? "chat-said" :
-                          msg.type === "ai" ? "chat-ai" : "bg-zinc-900 text-zinc-400 text-lg self-center text-center"
-                      }`}
-                  >
-                    {msg.text}
+              {messages.map(m => (
+                <div key={m.id} style={{ display: "flex", flexDirection: "column", alignItems: m.type === "said" ? "flex-end" : "flex-start" }}>
+                  <div className={`chat-bubble ${m.type === "heard" ? "chat-heard" :
+                      m.type === "said" ? "chat-said" :
+                        m.type === "ai" ? "chat-ai" : "chat-system"
+                    }`}>
+                    {m.text}
                   </div>
-                  <span className="text-xs text-zinc-600 mt-1 px-1">
-                    {msg.type === "heard" ? "🔊 Escuchado" : msg.type === "said" ? "💬 Respondido" : ""}
-                    {" "}{msg.time}
+                  <span style={{ fontSize: "0.65rem", color: "#52525b", marginTop: 2, paddingLeft: 4 }}>
+                    {m.type === "heard" ? "🔊 Escuchado" : m.type === "said" ? "💬 Enviado" : ""}
+                    {" "}{m.time}
                   </span>
                 </div>
               ))}
 
-              {/* Live transcript (while listening) */}
+              {/* Live transcript while listening */}
               {isListening && transcript && (
-                <div className="flex flex-col items-start">
-                  <div className="chat-bubble chat-heard opacity-70 animate-pulse">
-                    {transcript}...
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                  <div className="chat-bubble chat-heard" style={{ opacity: 0.8 }}>
+                    {transcript}
                   </div>
-                  <span className="text-xs text-yellow-400 mt-1 px-1">🎤 Escuchando en vivo...</span>
+                  <span style={{ fontSize: "0.7rem", color: "#facc15", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>
+                    <span className="live-dot" /> Escuchando en vivo...
+                  </span>
                 </div>
               )}
 
               {/* AI suggestions */}
-              {(responses.length > 0 || isAnalyzing) && (
-                <div className="flex flex-col gap-2 mt-2 p-3 bg-zinc-900/80 rounded-2xl border border-zinc-800">
-                  <p className="text-lg font-bold text-zinc-400 flex items-center gap-2">
-                    <MessageSquare className="w-5 h-5 text-green-400" />
-                    Respuestas sugeridas:
+              {(responses.length > 0 || isThinking) && (
+                <div style={{ padding: 10, background: "#18181b", borderRadius: 14, border: "1px solid #27272a", marginTop: 4 }}>
+                  <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "#71717a", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                    <MessageSquare style={{ width: 16, height: 16, color: "#22c55e" }} /> Respuestas sugeridas:
                   </p>
-                  {isAnalyzing ? (
-                    <p className="text-xl text-zinc-500 animate-pulse text-center py-4">🧠 Pensando...</p>
-                  ) : (
-                    responses.map((r, i) => (
-                      <button
-                        key={i}
-                        onClick={() => selectResponse(r, i)}
-                        className={`w-full text-left p-4 rounded-xl border-2 transition-all text-2xl font-bold leading-snug ${speakingIndex === i
-                            ? "bg-yellow-400 text-zinc-900 border-yellow-400"
-                            : "bg-zinc-800 text-white border-zinc-700 hover:border-yellow-400/50 active:scale-[0.98]"
-                          }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="flex-1">{r}</span>
-                          <Volume2 className="w-6 h-6 shrink-0 opacity-60" />
-                        </div>
-                      </button>
-                    ))
-                  )}
+                  {isThinking ? (
+                    <p style={{ textAlign: "center", padding: 16, fontSize: "1.1rem", color: "#71717a" }}>🧠 Pensando...</p>
+                  ) : responses.map((r, i) => (
+                    <button
+                      key={i}
+                      onClick={() => selectResponse(r, i)}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        border: `2px solid ${speakIdx === i ? "#facc15" : "#3f3f46"}`,
+                        background: speakIdx === i ? "#facc15" : "#27272a",
+                        color: speakIdx === i ? "#18181b" : "#fafafa",
+                        fontSize: "1.2rem",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        marginBottom: 6,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        transition: "all 0.12s",
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{r}</span>
+                      <Volume2 style={{ width: 18, height: 18, opacity: 0.5, flexShrink: 0 }} />
+                    </button>
+                  ))}
                 </div>
               )}
 
               <div ref={chatEndRef} />
             </div>
 
-            {/* ─── Bottom Input Area ─── */}
-            <div className="shrink-0 bg-zinc-900 border-t border-zinc-800 px-3 py-3 flex flex-col gap-2">
+            {/* ── Bottom controls ── */}
+            <div style={{ flexShrink: 0, background: "#18181b", borderTop: "1px solid #27272a", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
 
-              {/* Mic + Analyze row */}
-              <div className="flex gap-2">
+              {/* Write what you heard */}
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  value={heardInput}
+                  onChange={(e) => setHeardInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendHeardText(); }}
+                  placeholder="✏️ Escribe lo que escuchaste..."
+                  style={{
+                    flex: 1, background: "#27272a", border: "2px solid #3f3f46", borderRadius: 12,
+                    padding: "10px 12px", fontSize: "1rem", fontWeight: 700, color: "#fafafa",
+                    outline: "none",
+                  }}
+                />
+                <button
+                  onClick={sendHeardText}
+                  disabled={!heardInput.trim()}
+                  style={{
+                    width: 48, height: 48, borderRadius: 12, background: "#22c55e", color: "#fff",
+                    display: "flex", alignItems: "center", justifyContent: "center", border: "none",
+                    cursor: "pointer", opacity: heardInput.trim() ? 1 : 0.3,
+                  }}
+                >
+                  <Send style={{ width: 20, height: 20 }} />
+                </button>
+              </div>
+
+              {/* Mic + IA row */}
+              <div style={{ display: "flex", gap: 6 }}>
                 <button
                   onClick={toggleListening}
                   disabled={!isSupported}
-                  className={`flex-1 py-4 rounded-2xl font-bold text-xl flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40 ${isListening ? "bg-red-600 text-white mic-pulse" : "bg-yellow-400 text-zinc-900"
-                    }`}
+                  className={isListening ? "mic-pulse" : ""}
+                  style={{
+                    flex: 1, padding: "14px 0", borderRadius: 16, fontWeight: 800, fontSize: "1.2rem",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                    background: isListening ? "#dc2626" : "#facc15",
+                    color: isListening ? "#fff" : "#422006",
+                    border: "none", cursor: "pointer",
+                    opacity: isSupported ? 1 : 0.4,
+                  }}
                 >
-                  {isListening ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
+                  {isListening ? <MicOff style={{ width: 22, height: 22 }} /> : <Mic style={{ width: 22, height: 22 }} />}
                   {isListening ? "PARAR" : "🎤 ESCUCHAR"}
                 </button>
+
                 {transcript && !isListening && (
                   <button
-                    onClick={manualAnalyze}
-                    disabled={isAnalyzing}
-                    className="px-5 py-4 rounded-2xl bg-green-600 text-white text-xl font-bold active:scale-95 flex items-center gap-2"
+                    onClick={analyzeTranscript}
+                    disabled={isThinking}
+                    style={{
+                      padding: "14px 20px", borderRadius: 16, background: "#22c55e", color: "#fff",
+                      fontWeight: 800, fontSize: "1.1rem", border: "none", cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 6,
+                    }}
                   >
-                    <Send className="w-6 h-6" />
-                    IA
+                    <Send style={{ width: 18, height: 18 }} /> IA
                   </button>
                 )}
               </div>
 
-              {/* Manual text reply row */}
-              <div className="flex gap-2 items-end">
-                <textarea
-                  ref={replyRef}
-                  rows={1}
+              {/* Manual reply */}
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  ref={replyRef as any}
                   value={manualReply}
                   onChange={(e) => setManualReply(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendManualReply(); }
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                  placeholder="💬 Tu respuesta manual..."
+                  style={{
+                    flex: 1, background: "#27272a", border: "2px solid #3f3f46", borderRadius: 12,
+                    padding: "10px 12px", fontSize: "1rem", fontWeight: 700, color: "#fafafa",
+                    outline: "none",
                   }}
-                  placeholder="Escribe tu respuesta..."
-                  className="flex-1 bg-zinc-800 border-2 border-zinc-700 rounded-xl px-4 py-3 text-xl font-bold text-white placeholder-zinc-600 focus:border-yellow-400 outline-none resize-none"
                 />
                 <button
-                  onClick={sendManualReply}
+                  onClick={sendReply}
                   disabled={!manualReply.trim()}
-                  className="w-14 h-14 rounded-xl bg-yellow-400 text-zinc-900 flex items-center justify-center disabled:opacity-30 active:scale-90 shrink-0"
+                  style={{
+                    width: 48, height: 48, borderRadius: 12, background: "#facc15", color: "#422006",
+                    display: "flex", alignItems: "center", justifyContent: "center", border: "none",
+                    cursor: "pointer", opacity: manualReply.trim() ? 1 : 0.3,
+                  }}
                 >
-                  <Send className="w-6 h-6" />
+                  <Send style={{ width: 20, height: 20 }} />
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* ═══════ TAB: PHOTOS ═══════ */}
+        {/* ═══ PHOTOS TAB ═══ */}
         {tab === "photos" && (
-          <div className="flex-1 flex flex-col p-4 gap-4">
-            <h2 className="text-3xl font-bold flex items-center gap-3">
-              <ImageIcon className="w-8 h-8 text-yellow-400" /> Analizar Foto
+          <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <ImageIcon style={{ width: 28, height: 28, color: "#facc15" }} /> Analizar Foto
             </h2>
-            <label className={`btn-huge btn-secondary cursor-pointer relative ${isMediaLoading ? "opacity-60" : ""}`}>
-              <input ref={fileInputRef} type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handlePhoto} disabled={isMediaLoading} />
-              <Camera className="w-9 h-9" />
-              {isMediaLoading ? "⏳ ANALIZANDO..." : "📸 TOMAR O SUBIR FOTO"}
+            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
+              <input type="file" accept="image/*" capture="environment" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handlePhoto} disabled={mediaLoading} />
+              <Camera style={{ width: 24, height: 24 }} />
+              {mediaLoading ? "⏳ ANALIZANDO..." : "📸 TOMAR O SUBIR FOTO"}
             </label>
-            {imagePreview && (
-              <div className="rounded-2xl overflow-hidden border-2 border-zinc-800 max-h-52">
-                <img src={imagePreview} alt="Foto" className="w-full object-cover max-h-52" />
-              </div>
-            )}
-            {mediaSummary && (
-              <div className="bg-yellow-400/10 border-2 border-yellow-400 rounded-2xl p-5 flex flex-col gap-3">
-                <p className="text-3xl font-bold text-white leading-snug">{mediaSummary}</p>
-                <button onClick={() => speak(mediaSummary)} className="btn-huge bg-zinc-800 text-yellow-400 border-2 border-zinc-700">
-                  <Volume2 className="w-7 h-7" /> 🔊 LEER EN VOZ ALTA
+            {preview && <img src={preview} alt="" style={{ borderRadius: 14, maxHeight: 200, objectFit: "cover", width: "100%", border: "2px solid #27272a" }} />}
+            {summary && (
+              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
+                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* ═══════ TAB: DOCS ═══════ */}
+        {/* ═══ DOCS TAB ═══ */}
         {tab === "docs" && (
-          <div className="flex-1 flex flex-col p-4 gap-4">
-            <h2 className="text-3xl font-bold flex items-center gap-3">
-              <FileText className="w-8 h-8 text-yellow-400" /> Analizar Documento
+          <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <FileText style={{ width: 28, height: 28, color: "#facc15" }} /> Analizar Documento
             </h2>
-            <label className={`btn-huge btn-secondary cursor-pointer relative ${isMediaLoading ? "opacity-60" : ""}`}>
-              <input ref={docInputRef} type="file" accept="image/*,.pdf" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleDoc} disabled={isMediaLoading} />
-              <FileText className="w-9 h-9" />
-              {isMediaLoading ? "⏳ LEYENDO..." : "📄 SUBIR DOCUMENTO O FOTO"}
+            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
+              <input type="file" accept="image/*,.pdf" capture="environment" style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }} onChange={handleDoc} disabled={mediaLoading} />
+              <FileText style={{ width: 24, height: 24 }} />
+              {mediaLoading ? "⏳ LEYENDO..." : "📄 SUBIR DOCUMENTO"}
             </label>
-            {imagePreview && (
-              <div className="rounded-2xl overflow-hidden border-2 border-zinc-800 max-h-52">
-                <img src={imagePreview} alt="Doc" className="w-full object-cover max-h-52" />
-              </div>
-            )}
-            {mediaSummary && (
-              <div className="bg-yellow-400/10 border-2 border-yellow-400 rounded-2xl p-5 flex flex-col gap-3">
-                <h3 className="text-yellow-400 text-xl font-bold">📄 Resumen:</h3>
-                <p className="text-3xl font-bold text-white leading-snug">{mediaSummary}</p>
-                <button onClick={() => speak(mediaSummary)} className="btn-huge bg-zinc-800 text-yellow-400 border-2 border-zinc-700">
-                  <Volume2 className="w-7 h-7" /> 🔊 LEER EN VOZ ALTA
+            {preview && <img src={preview} alt="" style={{ borderRadius: 14, maxHeight: 200, objectFit: "cover", width: "100%", border: "2px solid #27272a" }} />}
+            {summary && (
+              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
+                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "1rem", marginBottom: 6 }}>📄 Resumen:</h3>
+                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* ═══════ TAB: AUDIO ═══════ */}
+        {/* ═══ AUDIO TAB ═══ */}
         {tab === "audio" && (
-          <div className="flex-1 flex flex-col p-4 gap-4">
-            <h2 className="text-3xl font-bold flex items-center gap-3">
-              <Music className="w-8 h-8 text-yellow-400" /> Transcribir Audio
+          <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <Music style={{ width: 28, height: 28, color: "#facc15" }} /> Transcribir Audio
             </h2>
-            <p className="text-xl text-zinc-400">Sube un audio corto (máximo 1 minuto) y Gemini lo transcribirá a texto.</p>
-            <label className={`btn-huge btn-secondary cursor-pointer relative ${isMediaLoading ? "opacity-60" : ""}`}>
-              <input ref={audioInputRef} type="file" accept="audio/*,video/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleAudio} disabled={isMediaLoading} />
-              <Music className="w-9 h-9" />
-              {isMediaLoading ? "⏳ TRANSCRIBIENDO..." : "🎵 SUBIR AUDIO"}
+            <p style={{ fontSize: "1rem", color: "#a1a1aa" }}>
+              Sube un audio corto (máximo ~30 seg / 3 MB) y Gemini lo transcribirá a texto.
+            </p>
+            <label className={`btn-huge btn-secondary ${mediaLoading ? "opacity-60" : ""}`} style={{ position: "relative", cursor: "pointer" }}>
+              <input
+                type="file"
+                accept="audio/mpeg,audio/mp4,audio/ogg,audio/wav,audio/webm,audio/aac,audio/flac,audio/x-m4a,video/mp4,video/webm,video/quicktime,.mp3,.m4a,.ogg,.wav,.aac,.flac,.mp4,.mov,.webm"
+                style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+                onChange={handleAudio}
+                disabled={mediaLoading}
+              />
+              <Music style={{ width: 24, height: 24 }} />
+              {mediaLoading ? "⏳ TRANSCRIBIENDO..." : "🎵 SUBIR AUDIO O VIDEO"}
             </label>
-            {mediaSummary && (
-              <div className="bg-yellow-400/10 border-2 border-yellow-400 rounded-2xl p-5 flex flex-col gap-3">
-                <h3 className="text-yellow-400 text-xl font-bold">📝 Transcripción:</h3>
-                <p className="text-3xl font-bold text-white leading-snug">{mediaSummary}</p>
-                <button onClick={() => speak(mediaSummary)} className="btn-huge bg-zinc-800 text-yellow-400 border-2 border-zinc-700">
-                  <Volume2 className="w-7 h-7" /> 🔊 LEER EN VOZ ALTA
+            {summary && (
+              <div style={{ background: "rgba(250,204,21,0.08)", border: "2px solid #facc15", borderRadius: 14, padding: 16 }}>
+                <h3 style={{ color: "#facc15", fontWeight: 700, fontSize: "1rem", marginBottom: 6 }}>📝 Transcripción:</h3>
+                <p style={{ fontSize: "1.4rem", fontWeight: 800, color: "#fafafa", lineHeight: 1.4 }}>{summary}</p>
+                <button onClick={() => speak(summary)} className="btn-huge" style={{ marginTop: 10, background: "#27272a", color: "#facc15", border: "2px solid #3f3f46" }}>
+                  <Volume2 style={{ width: 22, height: 22 }} /> 🔊 LEER EN VOZ ALTA
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* ═══════ TAB: CONTACTS ═══════ */}
+        {/* ═══ CONTACTS TAB ═══ */}
         {tab === "contacts" && (
-          <div className="flex-1 flex flex-col p-4 gap-4">
-            <h2 className="text-3xl font-bold flex items-center gap-3">
-              <Phone className="w-8 h-8 text-yellow-400" /> Contactos de Emergencia
+          <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+            <h2 style={{ fontSize: "1.6rem", fontWeight: 800, display: "flex", alignItems: "center", gap: 10 }}>
+              <Phone style={{ width: 28, height: 28, color: "#facc15" }} /> Contactos
             </h2>
-            <div className="flex flex-col gap-3">
-              {contacts.map((c) => (
-                <a
-                  key={c.id}
-                  href={`https://wa.me/${c.phone}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-huge bg-green-900 border-2 border-green-700 hover:bg-green-800 hover:border-green-400 text-white"
-                >
-                  📱 {c.name.toUpperCase()}
-                </a>
-              ))}
-            </div>
+            {contacts.map(c => (
+              <a key={c.id} href={`https://wa.me/${c.phone}`} target="_blank" rel="noopener noreferrer"
+                className="btn-huge" style={{ background: "#14532d", border: "2px solid #166534", color: "#fff", textDecoration: "none" }}>
+                📱 {c.name.toUpperCase()}
+              </a>
+            ))}
           </div>
         )}
       </div>
 
-      {/* ─── Fixed Bottom Tab Bar ─── */}
+      {/* ── Tab Bar ── */}
       <nav className="tab-bar">
         {([
-          { key: "chat", icon: <MessageSquare />, label: "Chat" },
-          { key: "photos", icon: <ImageIcon />, label: "Fotos" },
-          { key: "docs", icon: <FileText />, label: "Docs" },
-          { key: "audio", icon: <Music />, label: "Audio" },
-          { key: "contacts", icon: <Phone />, label: "Contactos" },
-        ] as { key: TabKey; icon: React.ReactNode; label: string }[]).map((t) => (
+          { k: "chat" as TabKey, icon: <MessageSquare />, label: "Chat" },
+          { k: "photos" as TabKey, icon: <ImageIcon />, label: "Fotos" },
+          { k: "docs" as TabKey, icon: <FileText />, label: "Docs" },
+          { k: "audio" as TabKey, icon: <Music />, label: "Audio" },
+          { k: "contacts" as TabKey, icon: <Phone />, label: "Contactos" },
+        ]).map(t => (
           <button
-            key={t.key}
-            onClick={() => { setTab(t.key); setMediaSummary(null); setImagePreview(null); }}
-            className={`tab-btn ${tab === t.key ? "active" : ""}`}
+            key={t.k}
+            onClick={() => { setTab(t.k); setSummary(null); setPreview(null); }}
+            className={`tab-btn ${tab === t.k ? "active" : ""}`}
           >
             {t.icon}
             <span>{t.label}</span>

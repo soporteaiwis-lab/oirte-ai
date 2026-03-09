@@ -8,47 +8,83 @@
 }
 
 :root {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --tab-height: 72px;
+  --bg: #09090b;
+  --fg: #fafafa;
+  --accent: #facc15;
+  --tab-h: 64px;
 }
 
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
-  font-size: 1.15rem;
-  line-height: 1.45;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior-y: contain;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
   overflow: hidden;
-  height: 100dvh;
+  height: 100%;
+  width: 100%;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
 
-/* Accessible huge buttons */
+/* ── Buttons ── */
 .btn-huge {
-  @apply w-full py-5 px-6 rounded-2xl font-bold text-2xl sm:text-3xl transition-transform active:scale-95 flex items-center justify-center gap-3;
+  width: 100%;
+  padding: 16px 20px;
+  border-radius: 16px;
+  font-weight: 800;
+  font-size: 1.35rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-huge:active {
+  transform: scale(0.96);
 }
 
 .btn-primary {
-  @apply bg-[#facc15] text-[#422006] shadow-lg;
+  background: var(--accent);
+  color: #422006;
 }
 
 .btn-secondary {
-  @apply bg-zinc-800 text-white shadow-md border-2 border-zinc-700;
+  background: #27272a;
+  color: #fafafa;
+  border: 2px solid #3f3f46;
 }
 
-/* Bottom tab bar */
+.btn-secondary:hover {
+  border-color: #52525b;
+}
+
+/* ── Tab bar ── */
 .tab-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: var(--tab-height);
+  height: var(--tab-h);
   background: #18181b;
-  border-top: 2px solid #27272a;
+  border-top: 1px solid #27272a;
   display: flex;
-  z-index: 100;
+  z-index: 200;
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
@@ -59,62 +95,151 @@ body {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   font-weight: 700;
   color: #71717a;
-  transition: color 0.15s;
+  transition: color 0.12s;
   -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 4px 0;
 }
 
 .tab-btn.active {
-  color: #facc15;
+  color: var(--accent);
 }
 
 .tab-btn svg {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
 }
 
-/* Chat messages */
+/* ── Chat bubbles ── */
 .chat-bubble {
-  @apply rounded-2xl px-4 py-3 max-w-[85%] text-2xl font-bold leading-snug;
+  border-radius: 16px;
+  padding: 12px 16px;
+  max-width: 88%;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .chat-heard {
-  @apply bg-zinc-800 text-white self-start border-l-4 border-yellow-400;
+  background: #27272a;
+  color: #fafafa;
+  align-self: flex-start;
+  border-left: 4px solid var(--accent);
 }
 
 .chat-said {
-  @apply bg-yellow-400 text-zinc-900 self-end;
+  background: var(--accent);
+  color: #18181b;
+  align-self: flex-end;
 }
 
 .chat-ai {
-  @apply bg-zinc-700 text-white self-start border-l-4 border-green-500;
+  background: #1a2e1a;
+  color: #bbf7d0;
+  align-self: flex-start;
+  border-left: 4px solid #22c55e;
 }
 
-/* Scrollable content area */
-.app-content {
-  height: calc(100dvh - var(--tab-height));
+.chat-system {
+  background: transparent;
+  color: #71717a;
+  align-self: center;
+  text-align: center;
+  font-size: 0.9rem;
+  max-width: 100%;
+}
+
+/* ── Main content area ── */
+.app-shell {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.app-header {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  background: #18181b;
+  border-bottom: 1px solid #27272a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 100;
+}
+
+.app-body {
+  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Pulse animation for mic */
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.5);
-  }
+/* ── Mic pulse ── */
+@keyframes mic-pulse {
 
-  70% {
-    box-shadow: 0 0 0 20px rgba(250, 204, 21, 0);
-  }
-
+  0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 0 14px rgba(250, 204, 21, 0);
   }
 }
 
 .mic-pulse {
-  animation: pulse-ring 1.5s infinite;
+  animation: mic-pulse 1.2s infinite;
+}
+
+/* ── Live indicator ── */
+@keyframes blink {
+
+  0%,
+  100% {
+    opacity: 1
+  }
+
+  50% {
+    opacity: 0.3
+  }
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  background: #ef4444;
+  border-radius: 50%;
+  animation: blink 1s infinite;
+  display: inline-block;
+}
+
+/* ── Responsive desktop ── */
+@media (min-width: 768px) {
+  .app-shell {
+    border-left: 1px solid #27272a;
+    border-right: 1px solid #27272a;
+  }
+
+  .chat-bubble {
+    font-size: 1.5rem;
+  }
+
+  .btn-huge {
+    font-size: 1.5rem;
+    padding: 20px 24px;
+  }
 }
