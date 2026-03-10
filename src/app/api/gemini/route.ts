@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"];
 
+// Allow longer processing for audio/video
+export const maxDuration = 60;
+
 async function callGemini(apiKey: string, model: string, contents: object[]) {
     const url = `${GEMINI_API_BASE}/${model}:generateContent?key=${apiKey}`;
     const res = await fetch(url, {
@@ -86,18 +89,16 @@ IMPORTANTE: Devuelve SOLO un arreglo JSON, sin explicaciones ni markdown. Ejempl
 Si tiene datos importantes (fechas, montos, nombres) inclúyelos.
 Documento:
 """
-${body.docText.slice(0, 8000)}
+${body.docText.slice(0, 10000)}
 """`;
             const contents = [{ role: "user", parts: [{ text: prompt }] }];
             const { text: summary, model } = await tryModels(apiKey, contents);
             return NextResponse.json({ summary: summary.trim(), model });
         }
 
-        // ── Audio/Video transcription ──
-        if (body.audio && body.audioMimeType) {
-            const prompt = body.audioMimeType.startsWith("video/")
-                ? "Transcribe el audio de este video a texto en español. Si hay varias personas hablando, indica quién dice qué. Si es música, transcribe la letra. Devuelve solo el texto transcrito."
-                : "Transcribe el siguiente audio a texto en español. Si hay varias personas hablando, indica quién dice qué. Si es música, transcribe la letra, versos y coros. Devuelve solo el texto transcrito.";
+        // ── Audio transcription ──
+        if (body.audio && body.audioMimeType && !body.subtitles) {
+            const prompt = "Transcribe el siguiente audio a texto en español. Si hay varias personas hablando, indica quién dice qué. Si es música, transcribe la letra incluyendo versos y coros. Devuelve solo el texto transcrito.";
 
             const contents = [{
                 role: "user",
@@ -108,6 +109,30 @@ ${body.docText.slice(0, 8000)}
             }];
             const { text: transcription, model } = await tryModels(apiKey, contents);
             return NextResponse.json({ transcription: transcription.trim(), model });
+        }
+
+        // ── Video/Audio → Subtitles (timestamped transcription) ──
+        if (body.audio && body.audioMimeType && body.subtitles) {
+            const prompt = `Transcribe este video/audio a texto en español con marcas de tiempo.
+Formato OBLIGATORIO para cada línea: [MM:SS] texto hablado
+Ejemplo:
+[00:00] Hola, bienvenidos a este video
+[00:05] Hoy vamos a hablar de tecnología
+[00:12] Empecemos con el primer tema
+
+Incluye TODAS las palabras habladas con sus tiempos aproximados.
+Si hay música o sonidos, indícalo entre paréntesis: [00:30] (música de fondo)
+Devuelve SOLO las líneas con timestamps, sin explicaciones adicionales.`;
+
+            const contents = [{
+                role: "user",
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: body.audioMimeType, data: body.audio } },
+                ],
+            }];
+            const { text: transcription, model } = await tryModels(apiKey, contents);
+            return NextResponse.json({ transcription: transcription.trim(), model, subtitles: true });
         }
 
         return NextResponse.json({ error: "Falta texto, imagen, documento o audio" }, { status: 400 });
