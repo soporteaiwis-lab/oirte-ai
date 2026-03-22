@@ -14,10 +14,9 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "ELEVENLABS_API_KEY no encontrada" }, { status: 500 });
         }
 
-        // Voice ID: Bella (EXAVITQu4vr4xnSDxMaL) - Suave, cálida, amigable
-        // Funciona excelente en español con el modelo multilingual v2
-        const voiceId = "EXAVITQu4vr4xnSDxMaL"; 
-
+        // Voice ID: Por defecto usa tu voz clonada/agregada "hombre latino chileno" (kWte6xNdbQNpD0KNO0SC)
+        // Puedes cambiarla agregando ELEVENLABS_VOICE_ID en las variables de entorno de Vercel (o en tu .env.local)
+        const voiceId = (process.env.ELEVENLABS_VOICE_ID || "kWte6xNdbQNpD0KNO0SC").trim();
         const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
             method: "POST",
             headers: {
