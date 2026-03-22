@@ -14,9 +14,9 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "ELEVENLABS_API_KEY no encontrada" }, { status: 500 });
         }
 
-        // Voice ID: Por defecto usa tu voz clonada/agregada "hombre latino chileno" (kWte6xNdbQNpD0KNO0SC)
-        // Puedes cambiarla agregando ELEVENLABS_VOICE_ID en las variables de entorno de Vercel (o en tu .env.local)
-        const voiceId = (process.env.ELEVENLABS_VOICE_ID || "kWte6xNdbQNpD0KNO0SC").trim();
+        // Voice ID: Matilda (XrExE9yKIg1WjnnlVkGX) - "Knowledgeable, Professional"
+        // Es la mejor voz femenina de ElevenLabs para español neutro: Clara, firme, sin acento gringo y con muchísima expresión.
+        const voiceId = (process.env.ELEVENLABS_VOICE_ID || "XrExE9yKIg1WjnnlVkGX").trim();
         const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
             method: "POST",
             headers: {
@@ -27,9 +27,9 @@ export async function POST(req: NextRequest) {
                 text: text,
                 model_id: "eleven_multilingual_v2",
                 voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75,
-                    style: 0.5, 
+                    stability: 0.35,      // Más bajo = más expresividad y dinamismo emocional
+                    similarity_boost: 0.85, // Mantiene la voz clara y fiel al modelo original sin distorsiones
+                    style: 0.4,           // Agrega estilo y firmeza a la lectura
                     use_speaker_boost: true
                 }
             })
