@@ -14,9 +14,9 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "ELEVENLABS_API_KEY no encontrada" }, { status: 500 });
         }
 
-        // Voice ID: Matilda (XrExE9yKIg1WjnnlVkGX) - "Knowledgeable, Professional"
-        // Es la mejor voz femenina de ElevenLabs para español neutro: Clara, firme, sin acento gringo y con muchísima expresión.
-        const voiceId = (process.env.ELEVENLABS_VOICE_ID || "XrExE9yKIg1WjnnlVkGX").trim();
+        // Voice ID: Matilda (XrExE9yKIg1WjnnlVkGX)
+        // Fijado en el código para ignorar variables antiguas que hayan quedado estancadas en Vercel.
+        const voiceId = "XrExE9yKIg1WjnnlVkGX";
         const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
             method: "POST",
             headers: {
