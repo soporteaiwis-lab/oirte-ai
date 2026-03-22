@@ -18,7 +18,10 @@ type MediaSection = "photos" | "video" | "docs" | "audio";
 const ts = () => new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-const MAX_AUDIO_BYTES = 50 * 1024 * 1024; // 50 MB (Vercel Free limit is 4.5MB, but local allows 50MB)
+// Vercel Serverless Payload limit es 4.5 MB reales.
+// Al subir un archivo como base64, éste crece un 33%.
+// El límite SEGURO del archivo original es ~3.5 MB reales.
+const MAX_AUDIO_BYTES = 3.5 * 1024 * 1024;
 
 export default function Home() {
   const { isDemoUser, userName, enableDemoMode, disableDemoMode } = useDemoUser();
@@ -166,40 +169,7 @@ export default function Home() {
       window.speechSynthesis.speak(u);
     }
   }, [stopSpeech]);
-  console.warn("ElevenLabs falló, usando voz nativa. Razón:", e);
-  // Fallback a la voz nativa del dispositivo
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-    if (idx !== undefined) setSpeakIdx(null);
-    return;
-  }
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "es-ES";
-  u.rate = 1.0;
-  u.volume = 1;
-  u.pitch = 0.98; // Tono más sereno para la voz nativa
 
-  const voices = window.speechSynthesis.getVoices();
-  const bestVoice =
-    voices.find(v => v.lang.startsWith("es") && (v.name.includes("Natural") || v.name.includes("Online"))) ||
-    voices.find(v => v.lang.startsWith("es") && v.name.includes("Google")) ||
-    voices.find(v => v.lang.startsWith("es") && (v.name.includes("Sabina") || v.name.includes("Dalia") || v.name.includes("Elena"))) ||
-    voices.find(v => v.lang.startsWith("es") && v.name.includes("Female")) ||
-    voices.find(v => v.lang.startsWith("es"));
-
-  if (bestVoice) {
-    u.voice = bestVoice;
-    u.lang = bestVoice.lang;
-  }
-
-  if (idx !== undefined) {
-    u.onstart = () => setSpeakIdx(idx);
-    u.onend = () => setSpeakIdx(null);
-    u.onerror = () => { setSpeakIdx(null); };
-  }
-  window.speechSynthesis.speak(u);
-}
-  }, []);
 
 const selectResponse = (text: string, idx: number) => {
   addMsg("said", text);
@@ -301,7 +271,7 @@ const handleDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
 const handleAudio = async (e: React.ChangeEvent<HTMLInputElement>) => {
   const f = e.target.files?.[0]; if (!f) return;
   if (f.size > MAX_AUDIO_BYTES) {
-    alert(`⚠️ Archivo demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nMáximo ~4.5 MB (~5 min de audio).`);
+    alert(`⚠️ Archivo demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Vercel (Hobby): 3.5 MB.`);
     e.target.value = ""; return;
   }
   setMediaLoading(true); setSummary(null); setSubtitleText(null);
@@ -324,7 +294,7 @@ const handleAudio = async (e: React.ChangeEvent<HTMLInputElement>) => {
 const handleVideo = async (e: React.ChangeEvent<HTMLInputElement>, withSubs: boolean) => {
   const f = e.target.files?.[0]; if (!f) return;
   if (f.size > MAX_AUDIO_BYTES) {
-    alert(`⚠️ Video demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nMáximp ~4.5 MB. Usa un video corto o recórtalo antes de subirlo.`);
+    alert(`⚠️ Video demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Vercel (Hobby): 3.5 MB. Por favor redúcelo o acórtalo.`);
     e.target.value = ""; return;
   }
   setMediaLoading(true); setSummary(null); setSubtitleText(null);
