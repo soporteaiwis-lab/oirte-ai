@@ -90,7 +90,25 @@ export default function Home() {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "es-ES"; u.rate = 0.9; u.volume = 1;
+    u.lang = "es-ES"; 
+    u.rate = 1.0; 
+    u.volume = 1;
+    u.pitch = 1.05; // Un tono un poco más agudo transmite más alegría y amabilidad
+
+    // Intentar buscar la voz más natural posible
+    const voices = window.speechSynthesis.getVoices();
+    const bestVoice = 
+      voices.find(v => v.lang.startsWith("es") && (v.name.includes("Natural") || v.name.includes("Online"))) || // Edge Neural (muy naturales)
+      voices.find(v => v.lang.startsWith("es") && v.name.includes("Google")) || // Google Chrome HQ
+      voices.find(v => v.lang.startsWith("es") && (v.name.includes("Sabina") || v.name.includes("Dalia") || v.name.includes("Elena"))) || // Nombres femeninos amables comunes
+      voices.find(v => v.lang.startsWith("es") && v.name.includes("Female")) || 
+      voices.find(v => v.lang.startsWith("es")); 
+
+    if (bestVoice) {
+      u.voice = bestVoice;
+      u.lang = bestVoice.lang;
+    }
+
     if (idx !== undefined) {
       u.onstart = () => setSpeakIdx(idx);
       u.onend = () => setSpeakIdx(null);
