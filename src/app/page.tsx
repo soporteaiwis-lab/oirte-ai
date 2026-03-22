@@ -159,6 +159,7 @@ export default function Home() {
     if (!t) return;
     addMsg("said", t); speak(t);
     setManualReply(""); setResponses([]);
+    setTranscript(""); // Fix: limpia la caja de transcripción
   };
 
   const sendHeardText = () => {
@@ -167,6 +168,7 @@ export default function Home() {
     addMsg("heard", t);
     if (aiEnabled) fetchSuggestions(t);
     setHeardInput("");
+    setTranscript(""); // Fix: limpia la caja de transcripción
   };
 
   // ── Photo upload (with compression) ──────────────────────────
