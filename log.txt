@@ -1,0 +1,15 @@
+e3668cd fix(audio): stream TTS directly via GET endpoint to bypass strict Safari iOS autoplay timer without breaking DOM
+5dcb0ea fix(audio): hardcode Matilda voice to ignore and override stuck Vercel configuration
+5f15d18 fix: enforce strict 3.5MB limit for Vercel Hobby tier compatibility
+7cb159c fix(audio): prevent overlapping audio, add stop toggle, increase upload limit to 50MB
+9fae29a fix: chat transcript duplication bug when sending manual replies
+e884ddd style: change elevenlabs voice to matilda for clear, neutral, firm, expressive tone
+4293ced feat: change ElevenLabs voice to custom latino (hombre latino chileno) from user account
+f7d9350 feat: integrate ElevenLabs API for high-quality humanized TTS
+03366ee feat: improve TTS voice to sound natural and friendly
+48fb388 chore: trigger vercel deployment
+ac2c17f feat: AI toggle, 3-tab layout with Medios tab, video subtitles SRT, image compression, 5min audio, WhatsApp tip
+19fa5e2 fix: iOS speech recognition keeps text on PARAR, auto-stop silence, text doc support, gallery option, improved UX
+dfbfff4 fix: mobile layout, manual reply fields, audio accept types, iOS viewport, inline styles
+4fc912f docs: add README + trigger redeploy with env vars
+30cc4f3 feat: mobile app UI with tab navigation, chat conversation, audio upload, auto-stop silence, manual text reply
