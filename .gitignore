@@ -42,3 +42,6 @@ next-env.d.ts
 
 # hub connection (contains local invite token)
 _HUMAIN_CHAT/
+
+# Local Netlify folder
+.netlify
