@@ -18,10 +18,10 @@ type MediaSection = "photos" | "video" | "docs" | "audio";
 const ts = () => new Date().toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
-// Vercel Serverless Payload limit es 4.5 MB reales.
+// Netlify Functions (Lambda-based) payload limit es 6 MB reales.
 // Al subir un archivo como base64, éste crece un 33%.
-// El límite SEGURO del archivo original es ~3.5 MB reales.
-const MAX_AUDIO_BYTES = 3.5 * 1024 * 1024;
+// El límite SEGURO del archivo original es ~4 MB reales.
+const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
 
 export default function Home() {
   const { isDemoUser, userName, enableDemoMode, disableDemoMode } = useDemoUser();
@@ -271,7 +271,7 @@ const handleDoc = async (e: React.ChangeEvent<HTMLInputElement>) => {
 const handleAudio = async (e: React.ChangeEvent<HTMLInputElement>) => {
   const f = e.target.files?.[0]; if (!f) return;
   if (f.size > MAX_AUDIO_BYTES) {
-    alert(`⚠️ Archivo demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Vercel (Hobby): 3.5 MB.`);
+    alert(`⚠️ Archivo demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Netlify Functions: 4 MB.`);
     e.target.value = ""; return;
   }
   setMediaLoading(true); setSummary(null); setSubtitleText(null);
@@ -294,7 +294,7 @@ const handleAudio = async (e: React.ChangeEvent<HTMLInputElement>) => {
 const handleVideo = async (e: React.ChangeEvent<HTMLInputElement>, withSubs: boolean) => {
   const f = e.target.files?.[0]; if (!f) return;
   if (f.size > MAX_AUDIO_BYTES) {
-    alert(`⚠️ Video demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Vercel (Hobby): 3.5 MB. Por favor redúcelo o acórtalo.`);
+    alert(`⚠️ Video demasiado grande (${(f.size / 1024 / 1024).toFixed(1)} MB).\nRecuerda el límite estricto de Netlify Functions: 4 MB. Por favor redúcelo o acórtalo.`);
     e.target.value = ""; return;
   }
   setMediaLoading(true); setSummary(null); setSubtitleText(null);
